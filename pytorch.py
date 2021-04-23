@@ -1,25 +1,21 @@
 # %%
-# Include usual stuff.
 import torch as th
 import matplotlib.pyplot as plt
-import numpy as np
-import torch.utils.data as td
-import pandas as pd
 import torch.nn as nn
 from tqdm import tqdm
-from os import mkdir
-from shutil import copyfile, copytree
 import torch
 from sklearn.metrics import confusion_matrix
-import torch.nn.functional as F
 from torchvision import models, datasets, transforms
-import sys
 import torch as th
 import submission
 import torchvision.transforms.functional as T
 
-best_act = 0.
+dev = torch.device('cpu')
+if th.cuda.is_available():
+    dev = torch.device('cuda')
 
+# rest accuracy on validation so far
+best_act = 0.
 
 # %%
 TRANF_POWER = 0.1
@@ -44,17 +40,16 @@ train_dataset = datasets.ImageFolder(
 )
 
 validation_transform = transforms.Compose([
-        # transforms.Grayscale(), 
         transforms.Resize(150),
         transforms.ToTensor(),
 ])
 
-test_transform = transforms.Compose([
-    transforms.Resize(15),
-])
-
 validation_dataset = datasets.ImageFolder(
     "data/validation_folder", transform=validation_transform
+)
+
+test_dataset = datasets.ImageFolder(
+    "data/test_folder", transform=validation_transform
 )
 
 kwargs = {"num_workers": 5, "pin_memory": True}
@@ -66,22 +61,45 @@ validation_loader = torch.utils.data.DataLoader(
 )
 
 cnt = 0
-for i, _ in train_loader:
+for i, _ in train_dataset:
     cnt += 1
     if cnt > 10:
         break
-    plt.imshow(i[0][0])
+    plt.imshow(i[0])
     plt.show()
 
 # %%
+
+def make_submission(dataset, contains_labels=False):
+    with th.no_grad():
+        net.eval()
+        acc = 0
+        fout = open("data/submission.csv", "w")
+        fout.write("id,label\n")
+        for id, (img, label) in enumerate(dataset):
+            result = net(img.to(dev).view(1, img.shape[0], img.shape[1], img.shape[2]))
+
+            predicted = result.argmax(dim=1)[0].item()
+
+            if contains_labels:
+                acc += (1 if predicted == label else 0)
+            
+            fout.write(dataset.images[id] + "," + str(predicted) + "\n")
+
+        fout.close()
+
+        if contains_labels:
+            nr = len(dataset)
+            print(f"Accuracy: {round(acc / nr * 100, 2)}%")
+
 def train(train_loader, optimizer, epoch, criterion):
     net.train()
 
     total_loss = []
 
     for data, target in tqdm(train_loader):
-        data = data.cuda()
-        target = target.cuda()
+        data = data.to(dev)
+        target = target.to(dev)
 
         optimizer.zero_grad()
 
@@ -106,8 +124,8 @@ def test(loader, criterion, dataset_name):
 
     for data, target in loader:
         with torch.no_grad():
-            data = data.cuda()
-            target = target.cuda()
+            data = data.to(dev)
+            target = target.to(dev)
 
             prediction = net(data)
             loss += criterion(prediction, target)
@@ -133,65 +151,13 @@ def try_improove(acc):
         return
 
     best_act = acc
-    submission.make_submission(net, True, "test", test_transform, False)
+    submission.make_submission(test_dataset, False)
 
     print("New best:", best_act)
     th.save(net, "data/resnet_sav.th")
 
 
 # %%
-
-class ConvUnit(nn.Module):
-    def __init__(self, in_f, out_f, ker=3, max_pull=False):
-        super().__init__()
-        if max_pull == False:
-            self.net = nn.Sequential (
-                nn.Conv2d(in_f, out_f, kernel_size=ker, padding=ker//2),
-                nn.BatchNorm2d(out_f),
-                nn.ReLU()
-            )
-        else:
-            self.net = nn.Sequential (
-                nn.Conv2d(in_f, out_f, kernel_size=ker, padding=ker//2),
-                nn.BatchNorm2d(out_f),
-                nn.ReLU(),
-                nn.MaxPool2d((2, 2))
-            )
-    def forward(self, x):
-        return self.net(x)
-
-class FcUnit(nn.Module):
-    def __init__(self, in_f, out_f, dropout=0.3):
-        super().__init__()
-        self.net = nn.Sequential (
-            nn.Linear(in_f, out_f),
-            nn.BatchNorm1d(out_f),
-            nn.Dropout(dropout),
-            nn.ReLU()
-        )
-    def forward(self, x):
-        return self.net(x)
-
-
-
-class Clasic(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.net = nn.Sequential(
-            ConvUnit(3, 32, ker=7, max_pull=True),
-            ConvUnit(32, 64, ker=5, max_pull=True),
-            ConvUnit(64, 128, ker=3, max_pull=True),
-
-            nn.Flatten(),
-
-            FcUnit(128 * 6 * 6, 1000),
-            FcUnit(1000, 500),
-            FcUnit(500, 3)
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
 
 class Resnet(nn.Module):
     def __init__(self):
@@ -208,7 +174,7 @@ class Resnet(nn.Module):
         return x
 
 
-net = Resnet().cuda()
+net = Resnet().to(dev)
 criterion = nn.CrossEntropyLoss()
 ep = 0
 test_acc, train_acc = [], []
@@ -219,7 +185,7 @@ optimizer = torch.optim.Adam(
     net.parameters(), lr=3e-4
 )
 
-for e in range(1000):
+for e in range(1):
     print(f"Training epoch #{ep}", flush=True)
     train(train_loader, optimizer, ep, criterion)
     train_acc.append(test(train_loader, criterion, "Train dataset"))
@@ -244,8 +210,8 @@ def ConfusionArrays(model, loader, criterion, dataset_name):
 
     for data, target in tqdm(loader):
         with torch.no_grad():
-            data = data.cuda()
-            target = target.cuda()
+            data = data.to(dev)
+            target = target.to(dev)
 
             prediction = model(data)
             
@@ -266,9 +232,9 @@ plt.legend()
 plt.show()
 
 # %%
-th.save(net, "resnet_sav.th")
+# th.save(net, "resnet_sav.th")
 # %%
-net = th.load("data/resnet_sav.th").cuda()
+# net = th.load("resnet_sav.th").to(dev)
 # %%
-submission.make_submission(net, True, "validation", True)
+# submission.make_submission(net, True, "validation", True)
 # %%
