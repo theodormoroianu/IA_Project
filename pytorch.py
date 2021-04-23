@@ -26,9 +26,9 @@ train_transform = transforms.Compose([
         # transforms.ColorJitter(2 * TRANF_POWER, 2 * TRANF_POWER, TRANF_POWER, TRANF_POWER),
         transforms.ToTensor(),
         transforms.RandomRotation(degrees=20),
-        # transforms.RandomCrop(50, padding=1),
+        transforms.RandomCrop(150, padding=10),
         # transforms.RandomAutocontrast(),
-        # transforms.RandomAdjustSharpness(0.95),
+        transforms.RandomAdjustSharpness(0.95),
         # transforms.RandomResizedCrop(50, scale=(0.8, 1)),
         transforms.RandomErasing(scale=(0.02, 0.2)),
         # transforms.GaussianBlur(3, sigma=(0.01, 0.01)),
@@ -84,7 +84,8 @@ def make_submission(dataset, contains_labels=False):
             if contains_labels:
                 acc += (1 if predicted == label else 0)
             
-            fout.write(dataset.images[id] + "," + str(predicted) + "\n")
+            filename = dataset.imgs[id][0].split('/')[3]
+            fout.write(filename + "," + str(predicted) + "\n")
 
         fout.close()
 
@@ -151,7 +152,7 @@ def try_improove(acc):
         return
 
     best_act = acc
-    submission.make_submission(test_dataset, False)
+    make_submission(test_dataset, False)
 
     print("New best:", best_act)
     th.save(net, "data/resnet_sav.th")
@@ -182,10 +183,10 @@ test_acc, train_acc = [], []
 # %%
 
 optimizer = torch.optim.Adam(
-    net.parameters(), lr=3e-4
+    net.parameters(), lr=1e-5
 )
 
-for e in range(1):
+for e in range(1000):
     print(f"Training epoch #{ep}", flush=True)
     train(train_loader, optimizer, ep, criterion)
     train_acc.append(test(train_loader, criterion, "Train dataset"))
