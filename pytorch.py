@@ -18,17 +18,17 @@ if th.cuda.is_available():
 best_act = 0.
 
 # %%
-TRANF_POWER = 0.1
+TRANF_POWER = 0.2
 
 train_transform = transforms.Compose([
-        transforms.Resize(150),
+        transforms.Resize(250),
         # transforms.Grayscale(),
         # transforms.ColorJitter(2 * TRANF_POWER, 2 * TRANF_POWER, TRANF_POWER, TRANF_POWER),
         transforms.ToTensor(),
         transforms.RandomRotation(degrees=20),
-        transforms.RandomCrop(150, padding=10),
+        # transforms.RandomCrop(150, padding=10),
         # transforms.RandomAutocontrast(),
-        transforms.RandomAdjustSharpness(0.95),
+        # transforms.RandomAdjustSharpness(0.95),
         # transforms.RandomResizedCrop(50, scale=(0.8, 1)),
         transforms.RandomErasing(scale=(0.02, 0.2)),
         # transforms.GaussianBlur(3, sigma=(0.01, 0.01)),
@@ -40,7 +40,7 @@ train_dataset = datasets.ImageFolder(
 )
 
 validation_transform = transforms.Compose([
-        transforms.Resize(150),
+        transforms.Resize(250),
         transforms.ToTensor(),
 ])
 
@@ -163,10 +163,10 @@ def try_improove(acc):
 class Resnet(nn.Module):
     def __init__(self):
         super().__init__()
-        self.resnet = models.resnet34(pretrained=True)
-        # self.resnet = models.resnet18()
+        # self.resnet = models.resnet34(pretrained=True)
+        self.resnet = models.vgg16()
         self.fc = nn.Sequential(
-            nn.Dropout(0.1),
+            nn.Dropout(0.3),
             nn.Linear(1000, 3)
         )
 
@@ -183,7 +183,7 @@ test_acc, train_acc = [], []
 # %%
 
 optimizer = torch.optim.Adam(
-    net.parameters(), lr=1e-5
+    net.parameters(), lr=3e-4
 )
 
 for e in range(1000):
@@ -235,7 +235,7 @@ plt.show()
 # %%
 # th.save(net, "resnet_sav.th")
 # %%
-# net = th.load("resnet_sav.th").to(dev)
+net = th.load("data/resnet_sav.th").to(dev)
 # %%
 # submission.make_submission(net, True, "validation", True)
 # %%
