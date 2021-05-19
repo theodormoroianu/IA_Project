@@ -1,7 +1,5 @@
 
 # %%
-
-# Import required packages.
 import torch as th
 import matplotlib.pyplot as plt
 import torch.nn as nn
@@ -13,28 +11,29 @@ import torch as th
 import submission
 import torchvision.transforms.functional as T
 from positional_encodings import PositionalEncodingPermute2D
-import time
 
-# Check if cuda is enabled.
+
 dev = torch.device('cpu')
 if th.cuda.is_available():
     dev = torch.device('cuda')
 
 print("Device:", dev)
-
-# Best accuracy on validation so far.
-best_act = 0.
+# rest accuracy on validation so far
+best_act = 95
 
 # %%
-
-# Power of color jitter, and resize size.
 TRANF_POWER = 0.2
-RESIZE = 200
-
-# Path of the data.
+RESIZE = 100
+# p_enc = PositionalEncodingPermute2D(3)
+# p_enc_filter = p_enc(th.zeros(1, 3, RESIZE, RESIZE))[0]
 datapath = "data"
 
-# Training image transformations.
+# class PEnc(object):
+#     def __init__(self):
+#         pass
+#     def __call__(self, x):
+#         return x + p_enc_filter / 30
+
 train_transform = transforms.Compose([
         transforms.Resize(RESIZE),
         # transforms.Grayscale(),
@@ -42,9 +41,9 @@ train_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.RandomRotation(degrees=20),
         transforms.RandomCrop(RESIZE, padding=10),
-        # transforms.RandomAutocontrast(),
-        # transforms.RandomAdjustSharpness(0.95),
-        # transforms.RandomResizedCrop(RESIZE, scale=(0.8, 1)),
+        transforms.RandomAutocontrast(),
+        transforms.RandomAdjustSharpness(0.95),
+        transforms.RandomResizedCrop(RESIZE, scale=(0.8, 1)),
         # transforms.RandomEqualize(),
         # PEnc(),
         # transforms.RandomErasing(scale=(0.02, 0.2)),
@@ -52,8 +51,6 @@ train_transform = transforms.Compose([
         # transforms.RandomHorizontalFlip(),
         # transforms.RandomVerticalFlip()
 ])
-
-# Defining datasets / dataloaders.
 train_dataset = datasets.ImageFolder(
     datapath + "/train_folder", transform=train_transform
 )
@@ -72,11 +69,7 @@ test_dataset = datasets.ImageFolder(
     datapath + "/test_folder", transform=validation_transform
 )
 
-# For faster loading time.
-kwargs = {
-    "num_workers": 5,
-    "pin_memory": True
-}
+kwargs = {"num_workers": 5, "pin_memory": True}
 train_loader = torch.utils.data.DataLoader(
     train_dataset, batch_size=32, shuffle=True, **kwargs
 )
@@ -84,19 +77,20 @@ validation_loader = torch.utils.data.DataLoader(
     validation_dataset, batch_size=64, shuffle=False, **kwargs
 )
 
-# Show a few images.
-nr_shown = 0
-for img, _ in train_dataset:
-    nr_shown += 1
-    if nr_shown > 5:
+cnt = 0
+for i, _ in train_dataset:
+    cnt += 1
+    if cnt > 10:
         break
-    plt.imshow(img[0])
+    plt.imshow(i[0])
     plt.show()
+
+for i, _ in train_loader:
+    print(i.shape)
+    break
 
 # %%
 
-# Makes a new submission.
-# If contains_label is true, then tries to check accuracy.
 def make_submission(dataset, contains_labels=False):
     with th.no_grad():
         net.eval()
@@ -120,7 +114,6 @@ def make_submission(dataset, contains_labels=False):
             nr = len(dataset)
             print(f"Accuracy: {round(acc / nr * 100, 2)}%")
 
-# Trains the model one epoch.
 def train(train_loader, optimizer, epoch, criterion):
     net.train()
 
@@ -144,7 +137,7 @@ def train(train_loader, optimizer, epoch, criterion):
     print(f"Epoch: {epoch}:")
     print(f"Train Set: Average Loss: {avg_loss:.2f}")
 
-# Returns the accuracy and loss of the model for the given dataset.
+
 def test(loader, criterion, dataset_name):
     net.eval()
 
@@ -174,8 +167,7 @@ def test(loader, criterion, dataset_name):
 
     return loss.item(), percentage_correct.item()
 
-# Tries to improve the solution.
-def try_improve(acc):
+def try_improove(acc):
     global best_act
     if acc <= best_act:
         return
@@ -186,61 +178,89 @@ def try_improve(acc):
     print("New best:", best_act)
     th.save(net, "data/resnet_sav.th")
 
-test_acc, train_acc = [], []
-time_taken = []
 
 # %%
 
-# Resnet network, with an additional classifier.
-class Resnet(nn.Module):
+class ConvUnit(nn.Module):
+    def __init__(self, in_f, out_f, ker=3, dropout=0.05, max_pull=False):
+        super().__init__()
+        if max_pull == False:
+            self.net = nn.Sequential (
+                nn.Conv2d(in_f, out_f, kernel_size=ker, padding=ker//2),
+                nn.BatchNorm2d(out_f),
+                nn.Dropout2d(dropout),
+                nn.ReLU()
+            )
+        else:
+            self.net = nn.Sequential (
+                nn.Conv2d(in_f, out_f, kernel_size=ker, padding=ker//2, stride=2),
+                nn.BatchNorm2d(out_f),
+                nn.Dropout2d(dropout),
+                nn.ReLU()
+            )
+    def forward(self, x):
+        return self.net(x)
+
+class FcUnit(nn.Module):
+    def __init__(self, in_f, out_f, dropout=0.3):
+        super().__init__()
+        self.net = nn.Sequential (
+            nn.Linear(in_f, out_f),
+            nn.BatchNorm1d(out_f),
+            nn.Dropout(dropout),
+            nn.ReLU()
+        )
+    def forward(self, x):
+        return self.net(x)
+
+
+
+class Model(nn.Module):
     def __init__(self):
         super().__init__()
-        self.resnet = models.resnet34(pretrained=True)
-        self.fc = nn.Sequential(
-            nn.Dropout(0.4),
-            nn.Linear(1000, 3)
+        self.net = nn.Sequential(
+            ConvUnit(3, 16, ker=5),
+            ConvUnit(16, 32, ker=3, max_pull=True, dropout=0.1),
+            ConvUnit(32, 64, ker=3, max_pull=True, dropout=0.1),
+            ConvUnit(64, 128, ker=3, max_pull=True, dropout=0.1),
+
+            nn.Flatten(),
+
+            FcUnit(128 * 13 * 13, 1024, dropout=0.4),
+            FcUnit(1024, 512, dropout=0.4),
+            FcUnit(512, 3, dropout=0.)
         )
 
     def forward(self, x):
-        x = self.fc(self.resnet(x))
-        return x
+        return self.net(x)
 
-# Create the net and criterion.
-net = Resnet().to(dev)
+
+net = Model().to(dev)
 criterion = nn.CrossEntropyLoss()
 ep = 0
-# Disable gradients of the pretrained network.
-net.resnet.requires_grad = False
-
-# %%
-
-# Enable gradients of the pretrained network.
-net.resnet.requires_grad = True
+test_acc, train_acc = [], []
 
 
 # %%
 
-# Define the optimizer.
 optimizer = torch.optim.Adam(
-    net.parameters(), lr=1e-4
+    net.parameters(), lr=1e-6
 )
 
-# Train the network.
 for e in range(1000):
     print(f"Training epoch #{ep}", flush=True)
-    before = time.time()
     train(train_loader, optimizer, ep, criterion)
-    after = time.time()
     train_acc.append(test(train_loader, criterion, "Train dataset"))
     test_acc.append(test(validation_loader, criterion, "Validation dataset"))
-    time_taken.append(after - before)
-    try_improve(test_acc[-1][1])
+    try_improove(test_acc[-1][1])
     print("")
-    ep += 1
 
 # %%
 
-# Compute confusion Arrays.
+test(train_loader, criterion, "Train")
+test(validation_loader, criterion, "Validation")
+
+# %%
 def ConfusionArrays(model, loader, criterion, dataset_name):
     model.eval()
 
@@ -264,7 +284,6 @@ def ConfusionArrays(model, loader, criterion, dataset_name):
     
     return labels, predictions
 
-# Display various stuff.
 labels, predicted = ConfusionArrays(net, validation_loader, criterion, "Validation")
 plt.imshow(confusion_matrix(labels, predicted), cmap='gray')
 plt.show()
@@ -274,18 +293,4 @@ plt.plot([b for a, b in test_acc], label="testing")
 plt.legend()
 plt.show()
 
-#%%
-# Display train loss and validation loss for each epoch as scatter points.
-train_loss = [i[0] for i in train_acc]
-val_loss = [i[0] for i in test_acc]
-
-fig, ax = plt.subplots()
-
-ax.scatter(train_loss, val_loss, s=time_taken)
-
-for i in range(8):
-    ax.annotate(str(i + 1), (train_loss[i] + 0.003, val_loss[i] + 0.03))
-
-ax.set_xlabel("Train Loss")
-ax.set_ylabel("Validation Loss")
 # %%
