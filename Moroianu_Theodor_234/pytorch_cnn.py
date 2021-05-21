@@ -1,5 +1,6 @@
 
 # %%
+# import stuff.
 import torch as th
 import matplotlib.pyplot as plt
 import torch.nn as nn
@@ -13,6 +14,7 @@ import torchvision.transforms.functional as T
 from positional_encodings import PositionalEncodingPermute2D
 
 
+# check if cuda is availalble.
 dev = torch.device('cpu')
 if th.cuda.is_available():
     dev = torch.device('cuda')
@@ -22,6 +24,8 @@ print("Device:", dev)
 best_act = 95
 
 # %%
+
+# Data augmentation definitions.
 TRANF_POWER = 0.2
 RESIZE = 100
 # p_enc = PositionalEncodingPermute2D(3)
@@ -90,7 +94,7 @@ for i, _ in train_loader:
     break
 
 # %%
-
+# Generates the csv file.
 def make_submission(dataset, contains_labels=False):
     with th.no_grad():
         net.eval()
@@ -114,6 +118,7 @@ def make_submission(dataset, contains_labels=False):
             nr = len(dataset)
             print(f"Accuracy: {round(acc / nr * 100, 2)}%")
 
+# trains one epoch.
 def train(train_loader, optimizer, epoch, criterion):
     net.train()
 
@@ -137,7 +142,7 @@ def train(train_loader, optimizer, epoch, criterion):
     print(f"Epoch: {epoch}:")
     print(f"Train Set: Average Loss: {avg_loss:.2f}")
 
-
+# tests the accuracy and loss on a given datasset.
 def test(loader, criterion, dataset_name):
     net.eval()
 
@@ -167,6 +172,7 @@ def test(loader, criterion, dataset_name):
 
     return loss.item(), percentage_correct.item()
 
+# calls the csv generator if necessary.
 def try_improove(acc):
     global best_act
     if acc <= best_act:
@@ -181,6 +187,7 @@ def try_improove(acc):
 
 # %%
 
+# network definition.
 class ConvUnit(nn.Module):
     def __init__(self, in_f, out_f, ker=3, dropout=0.05, max_pull=False):
         super().__init__()
@@ -243,6 +250,7 @@ test_acc, train_acc = [], []
 
 # %%
 
+# train.
 optimizer = torch.optim.Adam(
     net.parameters(), lr=1e-6
 )
