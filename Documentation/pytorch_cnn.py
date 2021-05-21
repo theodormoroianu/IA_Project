@@ -1,3 +1,4 @@
+
 # %%
 import torch as th
 import matplotlib.pyplot as plt
@@ -9,47 +10,63 @@ from torchvision import models, datasets, transforms
 import torch as th
 import submission
 import torchvision.transforms.functional as T
+from positional_encodings import PositionalEncodingPermute2D
+
 
 dev = torch.device('cpu')
 if th.cuda.is_available():
     dev = torch.device('cuda')
 
+print("Device:", dev)
 # rest accuracy on validation so far
-best_act = 0.
+best_act = 95
 
 # %%
-TRANF_POWER = 0.1
+TRANF_POWER = 0.2
+RESIZE = 100
+# p_enc = PositionalEncodingPermute2D(3)
+# p_enc_filter = p_enc(th.zeros(1, 3, RESIZE, RESIZE))[0]
+datapath = "data"
+
+# class PEnc(object):
+#     def __init__(self):
+#         pass
+#     def __call__(self, x):
+#         return x + p_enc_filter / 30
 
 train_transform = transforms.Compose([
-        transforms.Resize(150),
+        transforms.Resize(RESIZE),
         # transforms.Grayscale(),
         # transforms.ColorJitter(2 * TRANF_POWER, 2 * TRANF_POWER, TRANF_POWER, TRANF_POWER),
         transforms.ToTensor(),
         transforms.RandomRotation(degrees=20),
-        transforms.RandomCrop(150, padding=10),
-        # transforms.RandomAutocontrast(),
-        transforms.RandomAdjustSharpness(0.9),
-        transforms.RandomResizedCrop(150, scale=(0.8, 1)),
-        transforms.RandomErasing(scale=(0.02, 0.2)),
+        transforms.RandomCrop(RESIZE, padding=10),
+        transforms.RandomAutocontrast(),
+        transforms.RandomAdjustSharpness(0.95),
+        transforms.RandomResizedCrop(RESIZE, scale=(0.8, 1)),
+        # transforms.RandomEqualize(),
+        # PEnc(),
+        # transforms.RandomErasing(scale=(0.02, 0.2)),
         # transforms.GaussianBlur(3, sigma=(0.01, 0.01)),
         # transforms.RandomHorizontalFlip(),
         # transforms.RandomVerticalFlip()
 ])
 train_dataset = datasets.ImageFolder(
-    "data/train_folder", transform=train_transform
+    datapath + "/train_folder", transform=train_transform
 )
 
 validation_transform = transforms.Compose([
-        transforms.Resize(150),
+        transforms.Resize(RESIZE),
         transforms.ToTensor(),
+        # PEnc(),
 ])
 
 validation_dataset = datasets.ImageFolder(
-    "data/validation_folder", transform=validation_transform
+    datapath + "/validation_folder", transform=validation_transform
 )
 
 test_dataset = datasets.ImageFolder(
-    "data/test_folder", transform=validation_transform
+    datapath + "/test_folder", transform=validation_transform
 )
 
 kwargs = {"num_workers": 5, "pin_memory": True}
@@ -57,7 +74,7 @@ train_loader = torch.utils.data.DataLoader(
     train_dataset, batch_size=32, shuffle=True, **kwargs
 )
 validation_loader = torch.utils.data.DataLoader(
-    validation_dataset, batch_size=32, shuffle=False, **kwargs
+    validation_dataset, batch_size=64, shuffle=False, **kwargs
 )
 
 cnt = 0
@@ -68,13 +85,17 @@ for i, _ in train_dataset:
     plt.imshow(i[0])
     plt.show()
 
+for i, _ in train_loader:
+    print(i.shape)
+    break
+
 # %%
 
 def make_submission(dataset, contains_labels=False):
     with th.no_grad():
         net.eval()
         acc = 0
-        fout = open("data/submission.csv", "w")
+        fout = open(datapath + "/submission.csv", "w")
         fout.write("id,label\n")
         for id, (img, label) in enumerate(dataset):
             result = net(img.to(dev).view(1, img.shape[0], img.shape[1], img.shape[2]))
@@ -133,7 +154,7 @@ def test(loader, criterion, dataset_name):
 
             correct += th.sum(prediction.argmax(dim=1) == target)
 
-    loss /= len(loader.dataset)
+    loss /= len(loader)
 
     percentage_correct = 100.0 * correct / len(loader.dataset)
 
@@ -160,30 +181,70 @@ def try_improove(acc):
 
 # %%
 
-class Resnet(nn.Module):
+class ConvUnit(nn.Module):
+    def __init__(self, in_f, out_f, ker=3, dropout=0.05, max_pull=False):
+        super().__init__()
+        if max_pull == False:
+            self.net = nn.Sequential (
+                nn.Conv2d(in_f, out_f, kernel_size=ker, padding=ker//2),
+                nn.BatchNorm2d(out_f),
+                nn.Dropout2d(dropout),
+                nn.ReLU()
+            )
+        else:
+            self.net = nn.Sequential (
+                nn.Conv2d(in_f, out_f, kernel_size=ker, padding=ker//2, stride=2),
+                nn.BatchNorm2d(out_f),
+                nn.Dropout2d(dropout),
+                nn.ReLU()
+            )
+    def forward(self, x):
+        return self.net(x)
+
+class FcUnit(nn.Module):
+    def __init__(self, in_f, out_f, dropout=0.3):
+        super().__init__()
+        self.net = nn.Sequential (
+            nn.Linear(in_f, out_f),
+            nn.BatchNorm1d(out_f),
+            nn.Dropout(dropout),
+            nn.ReLU()
+        )
+    def forward(self, x):
+        return self.net(x)
+
+
+
+class Model(nn.Module):
     def __init__(self):
         super().__init__()
-        self.resnet = models.resnet34(pretrained=True)
-        # self.resnet = models.resnet18()
-        self.fc = nn.Sequential(
-            nn.Dropout(0.1),
-            nn.Linear(1000, 3)
+        self.net = nn.Sequential(
+            ConvUnit(3, 16, ker=5),
+            ConvUnit(16, 32, ker=3, max_pull=True, dropout=0.1),
+            ConvUnit(32, 64, ker=3, max_pull=True, dropout=0.1),
+            ConvUnit(64, 128, ker=3, max_pull=True, dropout=0.1),
+
+            nn.Flatten(),
+
+            FcUnit(128 * 13 * 13, 1024, dropout=0.4),
+            FcUnit(1024, 512, dropout=0.4),
+            FcUnit(512, 3, dropout=0.)
         )
 
     def forward(self, x):
-        x = self.fc(self.resnet(x))
-        return x
+        return self.net(x)
 
 
-net = Resnet().to(dev)
+net = Model().to(dev)
 criterion = nn.CrossEntropyLoss()
 ep = 0
 test_acc, train_acc = [], []
 
+
 # %%
 
 optimizer = torch.optim.Adam(
-    net.parameters(), lr=1e-5
+    net.parameters(), lr=1e-6
 )
 
 for e in range(1000):
@@ -232,10 +293,4 @@ plt.plot([b for a, b in test_acc], label="testing")
 plt.legend()
 plt.show()
 
-# %%
-# th.save(net, "resnet_sav.th")
-# %%
-net = th.load("data/resnet_sav.th").to(dev)
-# %%
-# submission.make_submission(net, True, "validation", True)
 # %%

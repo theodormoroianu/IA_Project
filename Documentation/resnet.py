@@ -1,4 +1,7 @@
+
 # %%
+
+# Import required packages.
 import torch as th
 import matplotlib.pyplot as plt
 import torch.nn as nn
@@ -7,74 +10,97 @@ import torch
 from sklearn.metrics import confusion_matrix
 from torchvision import models, datasets, transforms
 import torch as th
-import submission
 import torchvision.transforms.functional as T
+from positional_encodings import PositionalEncodingPermute2D
+import time
 
+# Check if cuda is enabled.
 dev = torch.device('cpu')
 if th.cuda.is_available():
     dev = torch.device('cuda')
 
-# rest accuracy on validation so far
+print("Device:", dev)
+
+# Best accuracy on validation so far.
 best_act = 0.
 
 # %%
-TRANF_POWER = 0.1
 
+# Power of color jitter, and resize size.
+TRANF_POWER = 0.2
+RESIZE = 200
+
+# Path of the data.
+datapath = "data"
+
+# Training image transformations.
 train_transform = transforms.Compose([
-        transforms.Resize(150),
+        transforms.Resize(RESIZE),
         # transforms.Grayscale(),
         # transforms.ColorJitter(2 * TRANF_POWER, 2 * TRANF_POWER, TRANF_POWER, TRANF_POWER),
         transforms.ToTensor(),
         transforms.RandomRotation(degrees=20),
-        transforms.RandomCrop(150, padding=10),
+        transforms.RandomCrop(RESIZE, padding=10),
         # transforms.RandomAutocontrast(),
-        transforms.RandomAdjustSharpness(0.9),
-        transforms.RandomResizedCrop(150, scale=(0.8, 1)),
-        transforms.RandomErasing(scale=(0.02, 0.2)),
+        # transforms.RandomAdjustSharpness(0.95),
+        # transforms.RandomResizedCrop(RESIZE, scale=(0.8, 1)),
+        # transforms.RandomEqualize(),
+        # PEnc(),
+        # transforms.RandomErasing(scale=(0.02, 0.2)),
         # transforms.GaussianBlur(3, sigma=(0.01, 0.01)),
         # transforms.RandomHorizontalFlip(),
         # transforms.RandomVerticalFlip()
 ])
+
+# Defining datasets / dataloaders.
 train_dataset = datasets.ImageFolder(
-    "data/train_folder", transform=train_transform
+    datapath + "/train_folder", transform=train_transform
 )
 
 validation_transform = transforms.Compose([
-        transforms.Resize(150),
+        transforms.Resize(RESIZE),
         transforms.ToTensor(),
+        # PEnc(),
 ])
 
 validation_dataset = datasets.ImageFolder(
-    "data/validation_folder", transform=validation_transform
+    datapath + "/validation_folder", transform=validation_transform
 )
 
 test_dataset = datasets.ImageFolder(
-    "data/test_folder", transform=validation_transform
+    datapath + "/test_folder", transform=validation_transform
 )
 
-kwargs = {"num_workers": 5, "pin_memory": True}
+# For faster loading time.
+kwargs = {
+    "num_workers": 5,
+    "pin_memory": True
+}
 train_loader = torch.utils.data.DataLoader(
     train_dataset, batch_size=32, shuffle=True, **kwargs
 )
 validation_loader = torch.utils.data.DataLoader(
-    validation_dataset, batch_size=32, shuffle=False, **kwargs
+    validation_dataset, batch_size=64, shuffle=False, **kwargs
 )
 
-cnt = 0
-for i, _ in train_dataset:
-    cnt += 1
-    if cnt > 10:
+# Show a few images.
+nr_shown = 0
+for img, _ in train_dataset:
+    nr_shown += 1
+    if nr_shown > 5:
         break
-    plt.imshow(i[0])
+    plt.imshow(img[0])
     plt.show()
 
 # %%
 
+# Makes a new submission.
+# If contains_label is true, then tries to check accuracy.
 def make_submission(dataset, contains_labels=False):
     with th.no_grad():
         net.eval()
         acc = 0
-        fout = open("data/submission.csv", "w")
+        fout = open(datapath + "/submission.csv", "w")
         fout.write("id,label\n")
         for id, (img, label) in enumerate(dataset):
             result = net(img.to(dev).view(1, img.shape[0], img.shape[1], img.shape[2]))
@@ -93,6 +119,7 @@ def make_submission(dataset, contains_labels=False):
             nr = len(dataset)
             print(f"Accuracy: {round(acc / nr * 100, 2)}%")
 
+# Trains the model one epoch.
 def train(train_loader, optimizer, epoch, criterion):
     net.train()
 
@@ -116,7 +143,7 @@ def train(train_loader, optimizer, epoch, criterion):
     print(f"Epoch: {epoch}:")
     print(f"Train Set: Average Loss: {avg_loss:.2f}")
 
-
+# Returns the accuracy and loss of the model for the given dataset.
 def test(loader, criterion, dataset_name):
     net.eval()
 
@@ -133,7 +160,7 @@ def test(loader, criterion, dataset_name):
 
             correct += th.sum(prediction.argmax(dim=1) == target)
 
-    loss /= len(loader.dataset)
+    loss /= len(loader)
 
     percentage_correct = 100.0 * correct / len(loader.dataset)
 
@@ -146,7 +173,8 @@ def test(loader, criterion, dataset_name):
 
     return loss.item(), percentage_correct.item()
 
-def try_improove(acc):
+# Tries to improve the solution.
+def try_improve(acc):
     global best_act
     if acc <= best_act:
         return
@@ -157,16 +185,18 @@ def try_improove(acc):
     print("New best:", best_act)
     th.save(net, "data/resnet_sav.th")
 
+test_acc, train_acc = [], []
+time_taken = []
 
 # %%
 
+# Resnet network, with an additional classifier.
 class Resnet(nn.Module):
     def __init__(self):
         super().__init__()
         self.resnet = models.resnet34(pretrained=True)
-        # self.resnet = models.resnet18()
         self.fc = nn.Sequential(
-            nn.Dropout(0.1),
+            nn.Dropout(0.4),
             nn.Linear(1000, 3)
         )
 
@@ -174,32 +204,42 @@ class Resnet(nn.Module):
         x = self.fc(self.resnet(x))
         return x
 
-
+# Create the net and criterion.
 net = Resnet().to(dev)
 criterion = nn.CrossEntropyLoss()
 ep = 0
-test_acc, train_acc = [], []
+# Disable gradients of the pretrained network.
+net.resnet.requires_grad = False
 
 # %%
 
+# Enable gradients of the pretrained network.
+net.resnet.requires_grad = True
+
+
+# %%
+
+# Define the optimizer.
 optimizer = torch.optim.Adam(
-    net.parameters(), lr=1e-5
+    net.parameters(), lr=1e-4
 )
 
+# Train the network.
 for e in range(1000):
     print(f"Training epoch #{ep}", flush=True)
+    before = time.time()
     train(train_loader, optimizer, ep, criterion)
+    after = time.time()
     train_acc.append(test(train_loader, criterion, "Train dataset"))
     test_acc.append(test(validation_loader, criterion, "Validation dataset"))
-    try_improove(test_acc[-1][1])
+    time_taken.append(after - before)
+    try_improve(test_acc[-1][1])
     print("")
+    ep += 1
 
 # %%
 
-test(train_loader, criterion, "Train")
-test(validation_loader, criterion, "Validation")
-
-# %%
+# Compute confusion Arrays.
 def ConfusionArrays(model, loader, criterion, dataset_name):
     model.eval()
 
@@ -223,6 +263,7 @@ def ConfusionArrays(model, loader, criterion, dataset_name):
     
     return labels, predictions
 
+# Display various stuff.
 labels, predicted = ConfusionArrays(net, validation_loader, criterion, "Validation")
 plt.imshow(confusion_matrix(labels, predicted), cmap='gray')
 plt.show()
@@ -232,10 +273,18 @@ plt.plot([b for a, b in test_acc], label="testing")
 plt.legend()
 plt.show()
 
-# %%
-# th.save(net, "resnet_sav.th")
-# %%
-net = th.load("data/resnet_sav.th").to(dev)
-# %%
-# submission.make_submission(net, True, "validation", True)
+#%%
+# Display train loss and validation loss for each epoch as scatter points.
+train_loss = [i[0] for i in train_acc]
+val_loss = [i[0] for i in test_acc]
+
+fig, ax = plt.subplots()
+
+ax.scatter(train_loss, val_loss, s=time_taken)
+
+for i in range(8):
+    ax.annotate(str(i + 1), (train_loss[i] + 0.003, val_loss[i] + 0.03))
+
+ax.set_xlabel("Train Loss")
+ax.set_ylabel("Validation Loss")
 # %%
